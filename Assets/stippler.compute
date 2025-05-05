@@ -2,13 +2,17 @@
 #pragma kernel XBlur
 #pragma kernel YBlur
 #pragma kernel MoveParticles
-
+#pragma kernel BoundaryCondition
 RWStructuredBuffer<float2> _PointBuffer;
 RWTexture2D<float> _DensityTexture;
 RWTexture2D<float> _ResultTexture;
-
+Texture2D<float4> _ImageTexture;
 float _BlurStrength;
 float _Decay;
+float4 _GradientStrength;
+
+float _ImageWidth;
+float _ImageHeight;
 
 static const float gaussianWeights[5] = {0.029, 0.235, 0.471, 0.235, 0.029};
 
@@ -18,6 +22,17 @@ void WriteDensity(uint3 id : SV_DispatchThreadID)
     float2 p = _PointBuffer[id.x];
     int2 pixel = uint2(round(p));
     _DensityTexture[pixel] += 1.0f;
+
+}
+
+[numthreads(8, 8, 1)]
+void BoundaryCondition(uint3 id : SV_DispatchThreadID)
+{
+    int2 pixel = (int2)id.xy;
+    if (pixel.x <= 0 || pixel.x >= _ImageWidth - 1 || pixel.y <= 0 || pixel.y >= _ImageHeight - 1)
+    {
+        _DensityTexture[pixel] += 10.0f;
+    }
 }
 
 [numthreads(8, 8, 1)]
@@ -50,8 +65,24 @@ void YBlur(uint3 id : SV_DispatchThreadID)
 void MoveParticles(uint3 id : SV_DispatchThreadID)
 {
     float2 p = _PointBuffer[id.x];
-    p.x += _ResultTexture[p].x * 0.01f;
-    // point += _ResultTexture[pixel] * 0.01f;
+    int2 pixel = uint2(round(p));
+
+    float2 gradient = float2(
+        _DensityTexture[ int2((pixel.x + 1) % _ImageWidth, pixel.y) ] - _DensityTexture[ int2((pixel.x - 1 + _ImageWidth) % _ImageWidth, pixel.y)],
+        _DensityTexture[ int2(pixel.x, (pixel.y + 1) % _ImageHeight) ] - _DensityTexture[ int2(pixel.x, (pixel.y - 1 + _ImageHeight) % _ImageHeight)]
+    );
+
+    float imageWeight = length(_ImageTexture[pixel]);
+    p.x += imageWeight;
+
+    p += -gradient * lerp(_GradientStrength.x, _GradientStrength.y, imageWeight);
+
+    while (p.x < 0.0f) p.x += _ImageWidth;
+    while (p.x > _ImageWidth) p.x -= _ImageWidth;
+    while (p.y < 0.0f) p.y += _ImageHeight;
+    while (p.y > _ImageHeight) p.y -= _ImageHeight;
+
+
     _PointBuffer[id.x] = p;
 }
 

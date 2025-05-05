@@ -1,21 +1,23 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using Microsoft.Unity.VisualStudio.Editor;
-using UnityEditor;
 using UnityEngine;
 
-[ExecuteInEditMode]
 public class stippler : MonoBehaviour
 {
     [SerializeField]
     private Texture2D _image;
 
     [SerializeField, Range(0, 10000)]
-    private int _numDots;
+    private int _numDots = 10000;
 
     [SerializeField, Range(0, 10)]
-    private float _dotSize;
+    private float _dotSize = 1f;
+
+    [SerializeField, Range(0.0f, 1.0f)]
+    private float _gradientStrengthMin = 0.5f;
+
+    [SerializeField, Range(0.0f, 1.0f)]
+    private float _gradientStrengthMax = 0.5f;
 
     [SerializeField]
     private Material _instanceMaterial;
@@ -24,10 +26,10 @@ public class stippler : MonoBehaviour
     private Mesh _sphereMesh;
 
     [SerializeField, Range(0.0f, 1.0f)]
-    private float _blurStrength = 0.5f;
+    private float _blurStrength = 1f;
 
     [SerializeField, Range(0.9f, 1.0f)]
-    private float _decay = 0.99f;
+    private float _decay = 0.9f;
 
     [SerializeField]
     bool _renderPoints = true;
@@ -51,7 +53,7 @@ public class stippler : MonoBehaviour
     int _xBlurKernel;
     int _yBlurKernel;
     int _moveParticlesKernel;
-
+    int _boundaryConditionKernel;
     private void OnDisable()
     {
         Debug.Log("OnDisable");
@@ -88,17 +90,23 @@ public class stippler : MonoBehaviour
         planeObj.transform.localScale = new Vector3(-_image.width, _image.height, 1);
         planeObj.transform.position = new Vector3(_image.width * 0.5f, _image.height * 0.5f, 0);
         planeObj.GetComponent<MeshRenderer>().material = material;
-        material.SetTexture("_MainTex", image);
+        if (name == "densityPlane")
+        {
+            material.SetFloat("_Scale", 0.01f);
+            material.SetColor("_Color", Color.green);
+            material.SetTexture("_MainTex", image);
+        }
+
         return planeObj;
     }
 
     void OnEnable()
     {
         _kernelMap = new Dictionary<string, int>();
-        _basicTextureMaterial = new Material(Shader.Find("Standard"));
-        _densityTextureMaterial = new Material(Shader.Find("Standard"));
+        _basicTextureMaterial = new Material(Shader.Find("Unlit/texture"));
+        _densityTextureMaterial = new Material(Shader.Find("Unlit/texture"));
 
-        _densityTexture = new RenderTexture(_image.width, _image.height, 0, RenderTextureFormat.ARGBFloat);
+        _densityTexture = new RenderTexture(_image.width, _image.height, 0, RenderTextureFormat.RFloat);
         _densityTexture.enableRandomWrite = true;
         _densityTexture.Create();
 
@@ -106,7 +114,7 @@ public class stippler : MonoBehaviour
         _imageTexture.enableRandomWrite = true;
         _imageTexture.Create();
 
-        _swapTexture = new RenderTexture(_image.width, _image.height, 0, RenderTextureFormat.ARGBFloat);
+        _swapTexture = new RenderTexture(_image.width, _image.height, 0, RenderTextureFormat.RFloat);
         _swapTexture.enableRandomWrite = true;
         _swapTexture.Create();
 
@@ -117,14 +125,14 @@ public class stippler : MonoBehaviour
         _xBlurKernel = _stipplerShader.FindKernel("XBlur");
         _yBlurKernel = _stipplerShader.FindKernel("YBlur");
         _moveParticlesKernel = _stipplerShader.FindKernel("MoveParticles");
-
+        _boundaryConditionKernel = _stipplerShader.FindKernel("BoundaryCondition");
         _imagePlane = createImagePlane(_image, _basicTextureMaterial, "imagePlane");
         _densityPlane = createImagePlane(_densityTexture, _densityTextureMaterial, "densityPlane");
-        
-        _imagePlane.SetActive(false);
-        _renderPoints = false;
 
-        var zdist = Math.Max(_image.width, _image.height);  
+        _imagePlane.SetActive(false);
+        // _renderPoints = false;
+
+        var zdist = Math.Max(_image.width, _image.height);
         Camera.main.transform.position = new Vector3(_image.width * 0.5f, _image.height * 0.5f, -zdist);
 
     }
@@ -164,6 +172,9 @@ public class stippler : MonoBehaviour
             return;
         }
 
+        _stipplerShader.SetFloat("_ImageWidth", _image.width);
+        _stipplerShader.SetFloat("_ImageHeight", _image.height);
+
         _stipplerShader.SetBuffer(_densityKernel, "_PointBuffer", _pointBuffer);
         _stipplerShader.SetTexture(_densityKernel, "_DensityTexture", _densityTexture);
         _stipplerShader.Dispatch(_densityKernel, _numDots / 8, 1, 1);
@@ -173,7 +184,7 @@ public class stippler : MonoBehaviour
 
         var xDim = Mathf.CeilToInt(_image.width / 8.0f);
         var yDim = Mathf.CeilToInt(_image.height / 8.0f);
-    
+
         _stipplerShader.SetTexture(_xBlurKernel, "_DensityTexture", _densityTexture);
         _stipplerShader.SetTexture(_xBlurKernel, "_ResultTexture", _swapTexture);
         _stipplerShader.Dispatch(_xBlurKernel, xDim, yDim, 1);
@@ -181,6 +192,16 @@ public class stippler : MonoBehaviour
         _stipplerShader.SetTexture(_yBlurKernel, "_ResultTexture", _densityTexture);
         _stipplerShader.SetTexture(_yBlurKernel, "_DensityTexture", _swapTexture);
         _stipplerShader.Dispatch(_yBlurKernel, xDim, yDim, 1);
+
+        _stipplerShader.SetTexture(_boundaryConditionKernel, "_DensityTexture", _densityTexture);
+        _stipplerShader.Dispatch(_boundaryConditionKernel, xDim, yDim, 1);
+
+
+        _stipplerShader.SetBuffer(_moveParticlesKernel, "_PointBuffer", _pointBuffer);
+        _stipplerShader.SetTexture(_moveParticlesKernel, "_ImageTexture", _imageTexture);
+        _stipplerShader.SetTexture(_moveParticlesKernel, "_DensityTexture", _densityTexture);
+        _stipplerShader.SetVector("_GradientStrength", new Vector4(_gradientStrengthMin, _gradientStrengthMax));
+        _stipplerShader.Dispatch(_moveParticlesKernel, _numDots / 8, 1, 1);
 
         _instanceMaterial.SetBuffer("_PointBuffer", _pointBuffer);
         _instanceMaterial.SetFloat("_DotSize", _dotSize);
