@@ -1,0 +1,66 @@
+#pragma kernel WriteDensity
+#pragma kernel XBlur
+#pragma kernel YBlur
+#pragma kernel MoveParticles
+
+RWStructuredBuffer<float2> _PointBuffer;
+RWTexture2D<float> _DensityTexture;
+RWTexture2D<float> _ResultTexture;
+
+float _BlurStrength;
+float _Decay;
+
+static const float gaussianWeights[5] = {0.029, 0.235, 0.471, 0.235, 0.029};
+
+[numthreads(8, 1, 1)]
+void WriteDensity(uint3 id : SV_DispatchThreadID)
+{
+    float2 p = _PointBuffer[id.x];
+    int2 pixel = uint2(round(p));
+    _DensityTexture[pixel] += 1.0f;
+}
+
+[numthreads(8, 8, 1)]
+void XBlur(uint3 id : SV_DispatchThreadID)
+{
+    int2 pixel = (int2)id.xy;
+    float sum = 0.0f;
+    for (int i = 0; i < 5; i++)
+    {
+        sum += _DensityTexture[pixel + int2(i - 2, 0)];
+    }
+    _ResultTexture[pixel] = lerp(_ResultTexture[pixel], sum / 5.0f, _BlurStrength);
+
+}
+
+[numthreads(8, 8, 1)]
+void YBlur(uint3 id : SV_DispatchThreadID)
+{
+    int2 pixel = (int2)id.xy;
+    float sum = 0.0f;
+    for (int i = 0; i < 5; i++)
+    {
+        sum += _DensityTexture[pixel + int2(0, i - 2)];
+    }
+    _ResultTexture[pixel] = lerp(_ResultTexture[pixel], sum / 5.0f, _BlurStrength);
+    _ResultTexture[pixel] *= _Decay;
+}   
+
+[numthreads(8, 1, 1)]
+void MoveParticles(uint3 id : SV_DispatchThreadID)
+{
+    float2 p = _PointBuffer[id.x];
+    p.x += _ResultTexture[p].x * 0.01f;
+    // point += _ResultTexture[pixel] * 0.01f;
+    _PointBuffer[id.x] = p;
+}
+
+
+//     int2 pixel = (int2)id.xy;
+
+//     float sum = 0.0f;
+//     for (int i = 0; i < 5; i++)
+//     {
+//         sum += _densityTexture[pixel + int2(i - 2, 0)];
+//     }
+// }
